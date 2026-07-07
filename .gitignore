@@ -1,5 +1,5 @@
 .DS_Store
-*.html
+analysis.html
 *_cache/
 *_files/
 .Rproj.user/
