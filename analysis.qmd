@@ -1,0 +1,1388 @@
+---
+title: "Time Series Analysis of U.S. Monthly Tourist Arrivals and Spending"
+author: "Anthony Le" 
+date: "Oct 27, 2024" 
+editor: visual 
+format:         
+  html:
+    code-fold: true 
+    code-summary: "Show the code" 
+    warning : false 
+    eval: true
+    self-contained: true 
+    toc: true 
+    theme: cosmo
+---
+
+```{r, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+# This code assumes that the user's device has all necessary packages installed. If not, please use: installed.packages("[Package Name]").
+library(astsa) #Library for book
+library(tstools)
+library(xts)
+library(mosaic)
+library(dplyr)
+library(car)
+library(Stat2Data)
+library(dynlm)
+library(nlme)
+library(AER)
+library(forecast)
+library(mgcv)
+library(tseries)
+library(lmtest)
+library(fBasics)
+library(leaps)
+library(urca)
+library(tidyverse)
+library(ggthemes)
+library(ggplot2)
+library(gt)
+library(kableExtra)
+library(modelsummary)
+library(performance)
+library(utils)
+library(scales)
+library(gridExtra)
+library(DHARMa)
+library(nortest)
+library(moments)
+library(see)
+library(patchwork)
+library(gganimate)
+library(gapminder)
+library(gifski)
+```
+
+# I. Introduction
+
+The economic impact of international tourism in the United States is substantial, with global travelers contributing billions annually to the U.S. economy. Before the COVID-19 pandemic, international visitors spent approximately \$233.5 billion in 2019 alone, which averages to nearly \$640 million daily (International Trade Administration, n.d.). With U.S. tourism accounting for 14.5% of total global spending on international travel (Zaheer, 2023), understanding the trends and drivers behind these expenditures is vital for sustaining this economic sector.
+
+While tourist spending is influenced by various socioeconomic factors, one of the most reliable indicators of such expenditures is the volume of international arrivals, commonly referred to as “Tourist Arrivals.” Fluctuations in arrivals often correlate closely with factors like currency exchange rates, seasonal trends, and global geopolitical stability (Hinton, 2024). In an attempt to explore the dynamics between tourist arrivals and spending, this project seeks to find the best predictive models of both metrics. Leveraging upon the function of time and SARIMA models, this study aims to provide a robust and comprehensive understanding of U.S. tourism’s economic contributions, as well as a tool for predicting future trends in international arrivals and spending.
+
+# II. Methods
+
+## 1. Working Data
+
+### a. Data Acquisition
+
+```{r}
+Arrivals <- read.csv("data/monthly_tourist_arrivals.csv")
+Exports <- read.csv("data/monthly_exports.csv")
+
+Arrivals$Total <- as.numeric(Arrivals$Total)
+Arrivals$Time <- floor_date(as.Date(Arrivals$Time), "month")
+Exports$Time <- as.Date(Exports$Time)
+
+Masterdata0 <- merge(Arrivals, Exports, by = "Time", all = TRUE)
+```
+
+For this project, we sourced two datasets from the International Trade Administration (ITA) website, both available in Excel format. The first dataset, “Monthly Exports Imports Balance,” was retrieved from the ITA’s International Travel Receipts and Payments Program. It provides monthly tourism-related trade data from January 1999 to July 2024, including metrics like total travel exports (receipts, or tourist spending) and imports (payments, or US citizen spending abroad), which are further subdivided into categories such as Travel Spending, Medical/ Education/ Workers Spending, and Passenger Fare Receipts. All figures are in millions of dollars and are seasonally adjusted.
+
+The second dataset, “Monthly Arrivals 2000 to Present – Country of Residence (COR),” was acquired from the ITA’s I-94 Arrivals Program. This file contains monthly data on the number of tourists arriving in the U.S. from January 2000 to July 2024, with a breakdown by world region (e.g., Central America, Western Europe) and individual countries of residence. This dataset also includes year-over-year changes for each category. No specific filters or exclusions were applied to the data before downloading.
+
+### b. Potential Biases
+
+The datasets used in this study inherently exclude certain categories of visitors. For instance, the International Visitor Arrivals Program - ADIS I-94 does not count travelers who do not stay overnight in the U.S. or those who visit on certain visa types. This exclusion may introduce some problems, as short-term visitors, particularly those near borders or in airports, may still contribute significantly to tourism-related spending but are not included in official tourist arrival figures. Another potential bias is related to the seasonality of tourist arrivals, which can be influenced by holidays and business cycles. Significant anomalies like the COVID-19 pandemic have also impacted arrival and spending patterns.
+
+### c. Data Wrangling
+
+To facilitate our analysis, we simplified both datasets by focusing on aggregated monthly data. For the “Monthly Exports Imports Balance” file, we retained only the total tourism-related exports (tourist spending). Similarly, for the “Monthly Arrivals” file, we retained only the total arrivals and subtotal information by world region, removing individual country data to streamline our analysis. The figure below shows a quick comparison of the two main time series remaining.
+
+```{r}
+plot1 <- ggplot(Masterdata0, aes(x = Time, y = Total)) +
+  geom_line(color = "darkblue", size = 1) +
+  ggtitle("US Monthly Tourist Arrivals (2000-2024)") +
+  xlab("Month") +
+  ylab("Tourist Arrivals") +
+  scale_x_date(date_labels = "%b %Y", date_breaks = "36 months")+
+  theme_light()+
+  scale_y_continuous(labels = scales::label_number(scale_cut = cut_short_scale()))
+
+plot2 <- ggplot(Masterdata0, aes(x = Time, y = Exports)) +
+  geom_line(color = "darkred", size = 1) +
+  ggtitle("US Monthly Tourist Exports, seasonally adjusted (2000-2024)") +
+  xlab("Month") +
+  ylab("Export Values (million $)") +
+  scale_x_date(date_labels = "%b %Y", date_breaks = "36 months")+
+  theme_light()+
+  scale_y_continuous(labels = scales::label_number(scale_cut = cut_short_scale()))
+
+grid.arrange(plot1, plot2, nrow=2)
+```
+
+Given the unique impact of COVID-19 on travel and spending, we intentionally excluded data post-January 2020. This choice allows us to analyze trends under more typical conditions, thus providing a more stable basis for examining seasonal and trend-based patterns in tourist arrivals and spending from 2000 to 2019. The figure below illustrates such exclusion of data.
+
+```{r}
+Masterdata <-Masterdata0 %>%
+  filter(Time < as.Date("2020-01-01"))
+Arrivals_ts = ts(Masterdata$Total,start= c(2000,1), frequency = 12)
+Exports_ts = ts(Masterdata$Exports,start= c(2000,1), frequency = 12)
+tstools::tsplot(list("Arrivals (millions), left axis"=Arrivals_ts/1000000),
+                tsr = list("Exports (billions $), right axis" =Exports_ts/1000), 
+                theme = init_tsplot_theme(line_colors = c("darkblue", "darkred")),
+                plot_title = "US Monthly Tourist Arrivals & Spending (2000-2019)")
+```
+
+## 2. Time Series Analysis
+
+### a. Assumption and Validation
+
+To conduct a rigorous statistical analysis of U.S. monthly tourist arrivals and spending, we assume that each account in our data is independent of one another and meets all criteria described by the International Trade Administration for their corresponding reporting data. The following paragraphs outline our general approach to finding the best models for our data.
+
+-   Before fitting any model, we will visualize the data with a time series plot and compute the Autocorrelation Function (ACF) and Partial Autocorrelation Function (PACF) plots to understand the underlying patterns if appropriate. We will then perform several stationarity tests, including the Augmented Dickey-Fuller (ADF) test, Phillips-Perron (PP) test, Kwiatkowski-Phillips-Schmidt-Shin (KPSS) test, and the Elliott-Rothenberg-Stock (ERS) test. More information on these tests and beyond will be available in the Appendix.
+
+-   After fitting the models, we will validate their effectiveness by plotting the fitted values with the original data and then analyzing the residuals. We will check for independence, normality, and stationarity of the residuals, employing tests such as the Shapiro-Wilk, Anderson-Darling, Jarque-Bera, and Lilliefors tests to ensure they follow a normal distribution. Additionally, ACF and density plots, Box-Ljung test, and other stationarity tests will inform us about potential issues with correlation and stationarity. In general, if the residuals are stationary, independent, and normally distributed, the model's predictions can be deemed reliable.
+
+-   When comparing models, we will utilize the Akaike Information Criterion (AIC), Bayesian Information Criterion (BIC), and R-squared values (for linear models). A lower AIC and BIC, along with a higher R-squared value, indicate a better-fitting model. If residuals are stationary, we may enhance the model by incorporating additional terms to improve its predictive capability.
+
+-   For validation, we will implement a cross-validation approach by excluding data from 2019, training our models with the available data up to 2018, and subsequently comparing the model’s predictions against actual arrivals and spending for that year. Finally, we will forecast tourist arrivals and spending for two years into the future, assuming the absence of COVID-19-related disruptions.
+
+### b. Function of Time Models
+
+In the event of identifying non-stationarity due to trends within the time series, we will apply function of time models to detrend the data. Specifically, we will utilize regression techniques to fit linear, quadratic, sinusoidal, and periodic trends with seasonal means. By identifying the appropriate model that best captures these trends, we will aim to derive residuals that should exhibit stationary behavior—constant variance and no serial correlation. Within this regard, we will also utilize decomposition techniques and plot accordingly to compare with our function of time models.
+
+### c. SARIMA Models
+
+Seasonal Autoregressive Integrated Moving Average (SARIMA) models will be employed to account for seasonal behavior in the data. SARIMA models are denoted as SARIMA(p, d, q) × (P, D, Q) \[s\], where: p: Order of the autoregressive component d: Degree of differencing q: Order of the moving average component P: Seasonal autoregressive order D: Seasonal differencing order Q: Seasonal moving average order s: Length of the seasonal cycle
+
+Prior to fitting a SARIMA model, we will first difference the data (normally and/or seasonally) as necessary to ensure stationarity. Different models will be fitted (based on ACF and PACF plots), validated by series of statistical tests, and analyzed in terms of residuals to confirm that they are stationary and uncorrelated. If the residuals follow a normal distribution, we can confidently utilize the model for forecasting future values.
+
+### d. Special Functions
+
+To facilitate this analysis, I have self-defined new functions in R to streamline various processes, including:
+
+-   `check_stationarity()`: This function performs stationarity tests (ADF, PP, KPSS, ERS) and summarizes the results in a user-friendly table.
+
+    ```{r}
+    # Stationarity Tests
+    check_stationarity <- function(data) {
+      adf_result <- adf.test(data)
+      pp_result <- pp.test(data)
+      kpss_result <- kpss.test(data)
+      urers_result <- ur.ers(data, type = "DF-GLS", model = "constant")
+      results <- data.frame(
+        Test = c("ADF Test", "Phillips-Perron Test", "KPSS Test", "ERS Test"),
+        `Test Statistic` = c(round(adf_result[["statistic"]][["Dickey-Fuller"]], 3),
+                             round(pp_result[["statistic"]][["Dickey-Fuller Z(alpha)"]], 3),
+                             round(kpss_result[["statistic"]][["KPSS Level"]], 3),
+                             round(urers_result@teststat, 3)),
+        `P-Value` = c(round(adf_result[["p.value"]],2),
+                      round(pp_result[["p.value"]],2),
+                      round(kpss_result[["p.value"]],2),
+                      "N/A"),
+        Interpretation = c(
+          ifelse(adf_result[["p.value"]] < 0.05, "Stationary", "Non-Stationary"),
+          ifelse(pp_result[["p.value"]] < 0.05, "Stationary", "Non-Stationary"),
+          ifelse(kpss_result[["p.value"]] < 0.05, "Non-Stationary", "Stationary"),
+          ifelse(urers_result@teststat < urers_result@cval[2], "Stationary", "Non-Stationary")))
+      kable(results, align = 'c') %>%
+        kable_styling(full_width = F, bootstrap_options = c("striped", "hover", "condensed")) %>%
+        add_header_above(c("Stationarity Test Summary" = 4))
+    }
+
+    ```
+
+-   `four_plots()` and `two_plots()`: These functions generate ACF and PACF plots for different segments of the data to visually assess autocorrelation.
+
+    ```{r}
+
+
+    # ACF/PACF/First-Last Third Plotting
+    four_plots <- function(data) {
+      n <- length(data)
+      first_third <- data[1:floor(n / 3)]
+      last_third <- data[floor(2 * n / 3):n]
+      par(mfrow = c(2, 2))
+      acf(data, main = "ACF of Whole Data", lag.max =30)
+      pacf(data, main = "PACF of Whole Data", lag.max =30)
+      acf(first_third, main = "ACF of First Third")
+      acf(last_third, main = "ACF of Last Third")
+      par(mfrow = c(1, 1))
+    }
+
+
+    # ACF/PACF Plotting
+    two_plots <- function(data) {
+      par(mfrow = c(1, 2))
+      acf(data, main = "ACF of Whole Data", lag.max =50)
+      pacf(data, main = "PACF of Whole Data", lag.max =50)
+      par(mfrow = c(1, 1))
+    }
+
+    # Differencing Plotting
+    diff_plots <- function(data, name) {
+      layout(matrix(c(1,1,2,3), 2, 2, byrow = TRUE))
+      astsa::tsplot(data, main= name)
+      abline(h = mean(data, na.rm = TRUE), col = "red", lty = 2)
+      acf(data, lag.max =30)
+      pacf(data, lag.max =30)
+      par(mfrow = c(1,1))
+    }
+
+
+
+    ```
+
+-   `model_summary_table()` and `sarima_summary_table( )`: These functions summarize the key metrics of fitted models, including R\^2 , AIC and BIC values, to facilitate comparison.
+
+    ```{r}
+
+    # Model Summary
+    model_summary_table <- function(models_list) {
+      model_names <- names(models_list)
+      if (is.null(model_names)) {
+        model_names <- paste("Model", seq_along(models_list)) }
+      summary_df <- data.frame(Model = character(),
+                               `Adjusted  $R^2$ ` = numeric(),
+                               AIC = numeric(),
+                               BIC = numeric(),
+                               stringsAsFactors = FALSE)
+      for (i in seq_along(models_list)) {
+        model <- models_list[[i]]
+        model_summary <- summary(model)
+        summary_df[i, ] <- c(
+          model_names[i],
+          round(model_summary[["adj.r.squared"]], 2),
+          round(AIC(model), 2),
+          round(BIC(model), 2)) }
+      kable(summary_df, align = 'c', col.names = c("Model", "Adjusted R²", "AIC", "BIC")) %>%
+        kable_styling(full_width = F, bootstrap_options = c("striped", "hover", "condensed")) %>%
+        add_header_above(c("Model Summary" = 4))
+    }
+
+
+
+
+    # SARIMA Model Summary
+    sarima_summary_table <- function(models_list) {
+      model_names <- names(models_list)
+      if (is.null(model_names)) {
+        model_names <- paste("Model", seq_along(models_list)) }
+      summary_df <- data.frame(Model = character(),
+                               AIC = numeric(),
+                               BIC = numeric(),
+                               stringsAsFactors = FALSE)
+      for (i in seq_along(models_list)) {
+        model <- models_list[[i]]
+        model_summary <- summary(model)
+        summary_df[i, ] <- c(
+          model_names[i],
+          round(AIC(model), 2),
+          round(BIC(model), 2)) }
+      kable(summary_df, align = 'c', col.names = c("Model",  "AIC", "BIC")) %>%
+        kable_styling(full_width = F, bootstrap_options = c("striped", "hover", "condensed")) %>%
+        add_header_above(c("Model Summary" = 3))
+    }
+
+    ```
+
+-   `check_normality_residuals()`: This function evaluates the residuals from fitted models through a series of different tests to ensure they conform to normality assumptions.
+
+    ```{r}
+
+    # Normality Tests Function
+    check_normality_residuals <- function(model) {
+      residuals <- residuals(model)
+      shapiro_result <- shapiro.test(residuals)
+      ad_result <- ad.test(residuals)
+      jb_result <- jarque.bera.test(residuals)
+      lillie_result <- lillie.test(residuals)
+      skew <- skewness(residuals)
+      kurt <- kurtosis(residuals)
+      # Summary table
+      results <- data.frame(
+        Test = c("Shapiro-Wilk Test", "Anderson-Darling Test", "Jarque-Bera Test", "Lilliefors Test", "Skewness", "Kurtosis"),
+        `Test Statistic` = c(round(shapiro_result$statistic, 3),
+                             round(ad_result$statistic, 3),
+                             round(jb_result$statistic, 3),
+                             round(lillie_result$statistic, 3),
+                             round(skew, 2),
+                             round(kurt, 2)),
+        `P-Value` = c(round(shapiro_result$p.value, 3),
+                      round(ad_result$p.value, 3),
+                      round(jb_result$p.value, 3),
+                      round(lillie_result$p.value, 3),
+                      "N/A", "N/A"),
+        Interpretation = c(
+          ifelse(shapiro_result$p.value > 0.05, "Normal", "Non-Normal"),
+          ifelse(ad_result$p.value > 0.05, "Normal", "Non-Normal"),
+          ifelse(jb_result$p.value > 0.05, "Normal", "Non-Normal"),
+          ifelse(lillie_result$p.value > 0.05, "Normal", "Non-Normal"),
+          ifelse(abs(skew) < 0.5, "Approximately Symmetric", ifelse(skew > 0, "Right-Skewed", "Left-Skewed")),
+          ifelse(abs(kurt - 3) < 0.5, "Mesokurtic", ifelse(kurt > 3, "Leptokurtic (Heavy Tails)", "Platykurtic (Light Tails)"))
+        )
+      )
+      kable(results, align = 'c') %>%
+        kable_styling(full_width = F, bootstrap_options = c("striped", "hover", "condensed")) %>%
+        add_header_above(c("Normality Test Summary" = 4))
+    }
+    ```
+
+```{r}
+  # Time Series Summary Table
+ts_summary_table <- function(ts_list) {
+  
+  ts_names <- names(ts_list)
+  if (is.null(ts_names)) {
+    ts_names <- paste("Series", seq_along(ts_list))  }
+  
+  summary_df <- data.frame(Series = character(),
+                           Start = character(),
+                           End = character(),
+                           Min = numeric(),
+                           Max = numeric(),
+                           Mean = numeric(),
+                           Median = numeric(),
+                           stringsAsFactors = FALSE)
+
+  for (i in seq_along(ts_list)) {
+    ts_data <- ts_list[[i]]
+    summary_df[i, ] <- c(
+      ts_names[i],
+      start(ts_data) %>% paste(collapse = "-"),
+      end(ts_data) %>% paste(collapse = "-"),
+      round(min(ts_data, na.rm = TRUE), 2),
+      round(max(ts_data, na.rm = TRUE), 2),
+      round(mean(ts_data, na.rm = TRUE), 2),
+      round(median(ts_data, na.rm = TRUE), 2)
+    )
+  }
+
+  kable(summary_df, align = 'c', 
+        col.names = c("Series", "Start", "End", "Min", "Max", "Mean", "Median")) %>%
+    kable_styling(full_width = F, bootstrap_options = c("striped", "hover", "condensed")) %>%
+    add_header_above(c("Time Series Summary" = 7))
+}
+
+```
+
+```{r}
+calculate_r2 <- function(predicted_values, actual_values) {
+  ss_residual <- sum((actual_values - predicted_values)^2)
+  ss_total <- sum((actual_values - mean(actual_values))^2)
+  r_squared <- 1 - (ss_residual / ss_total)
+  
+  cat("R-squared of the model is:", round(r_squared, 4), "\n")}
+
+```
+
+These functions enhance the analysis process by providing clarity and efficiency. Each function's details and the tests used are elaborated upon in the appendix.
+
+# III. Results & Conclusions
+
+## 1. Descriptive Analysis
+
+### a. Tourist Arrivals
+
+U.S. monthly tourist arrivals showed a notable increase over the observed period, beginning with 2,866,229 visitors in January 2000 and reaching 6,899,661 by July 2024, indicating an overall upward trend. The plot below illustrates the monthly arrival data from 2000 to July 2024, segmented by different world regions as well as the total aggregate. The mean monthly arrivals were approximately 4,709,139, with a median of 4,817,910. Notably, Western Europe accounted for an average of 902,992 monthly arrivals, Asia for 618,172, and South America for 301,831.
+
+The lowest recorded arrivals occurred in April 2020, when the number of visitors dropped sharply to 248,486, corresponding to the onset of U.S. border closures and social distancing measures due to the COVID-19 pandemic (Gonzalez-Barrera, 2020). Conversely, the highest number of monthly arrivals was recorded in August 2014, with 8,418,370 visitors.
+
+```{r}
+astsa::tsplot(x= Masterdata0$Time, y= Masterdata0$Total/1000000,
+       col = "darkblue",
+       lwd = 2,
+       main = "US Monthly Tourist Arrivals (2000-2024)",
+       xlab = "Year",
+       ylab = "Tourist Arrivals (millions)")
+  
+  lines(x= Masterdata0$Time, y= Masterdata0$Africa/1000000, col = 1, lwd = 1.5)
+  lines(x= Masterdata0$Time, y= Masterdata0$Asia/1000000, col = 2, lwd = 1.5)
+  lines(x= Masterdata0$Time, y= Masterdata0$W.Europe/1000000, col = 3, lwd = 1.5)
+  lines(x= Masterdata0$Time, y= Masterdata0$E.Europe/1000000, col = 4, lwd = 1.5)
+  lines(x= Masterdata0$Time, y= Masterdata0$C.America/1000000, col = 5, lwd = 1.5)
+  lines(x= Masterdata0$Time, y= Masterdata0$Caribbean/1000000, col = 6, lwd = 1.5)
+  lines(x= Masterdata0$Time, y= Masterdata0$S.America/1000000, col = 7, lwd = 1.5)
+  lines(x= Masterdata0$Time, y= Masterdata0$Oceania/1000000, col = 8, lwd = 1.5)
+  lines(x= Masterdata0$Time, y= Masterdata0$M.East/1000000, col = 9, lwd = 1.5)
+  
+  legend("topleft", col=c("darkblue",1:9), lty=1, lwd=2, pch=20, 
+         legend=c("Total", "Africa", "Asia", "W.Europe", "E.Europe", "C.America", "Caribbean", "S.America", "Oceania","M.East"), bg="white",ncol=2)
+  
+```
+
+Seasonal patterns are evident in the plot above, with clear peaks and troughs repeating annually. The plot below signifies that the summer months of July and August consistently show the highest arrivals, while January and February experience the lowest. This trend aligns with travel behavior, as summer weather is more favorable for tourism, and winter months see a decrease in travel as people return to work or school after the holidays. Additionally, colder weather and snow in northern regions may deter travel during these months.
+
+```{r}
+
+Masterdata <- Masterdata %>%
+  select("Time","Total","Exports") %>%
+  mutate("Month" = month(Time)) %>%
+  mutate("Year" = year(Time))
+
+p <- ggplot(Masterdata, aes(x=Month, y=Total/1000000, color = Year)) + 
+  geom_line(alpha = 0.7) +
+  labs(x = "Month",
+       y = "Total Arrivals (millions)",
+       title = "Total Arrivals by Month") +
+  theme_minimal() + 
+  scale_x_continuous(breaks=c(2,4, 6, 8,10,12)) +
+  transition_states(Year) 
+
+animate(p, renderer = gifski_renderer())
+
+```
+
+### b. Tourist Spending
+
+Monthly tourist spending, or "Tourist Exports," also shows a marked increase, starting at 9.2 billion dollars in January 2000 and reaching 21.1 billion dollars in July 2024. The mean monthly spending over this period was 13.7 billion dollars, with a median of 13.1 billion dollars. The lowest recorded spending occurred in September 2020, at 3.7 billion dollars, while the highest was in May 2024, with 21.66 billion dollars. However, it is noteworthy that this dataset is seasonally adjusted, which means that nominal spending figures may vary; for instance, the lowest nominal spending month may have occurred earlier in 2020 when the tourism sector was effectively shut down.
+
+For additional context on seasonal adjustments, please refer to the Appendix, where the seasonal adjustment methodology is outlined.
+
+```{r}
+ggplot(Masterdata, aes(x = Time, y = Exports)) +
+  geom_line(color = "darkred", size = 1) +
+  ggtitle("US Monthly Tourist Exports, seasonally adjusted (2000-2024)") +
+  xlab("Month") +
+  ylab("Export Values (million $)") +
+  scale_x_date(date_labels = "%b %Y", date_breaks = "36 months")+
+  theme_light()+
+  scale_y_continuous(labels = scales::label_number(scale_cut = cut_short_scale()))
+```
+
+### c. Time Series summary
+
+The table below compares statistical summaries of monthly tourist arrivals and exports for the entire period (2000-2024) versus the period excluding data from January 2020 onward.
+
+```{r}
+
+  ar_full <- ts(Masterdata0$Total,start= c(2000,1), frequency = 12)
+  ex_full <- ts(Masterdata0$Exports,start= c(2000,1), frequency = 12)
+  ts_series <- list("Tourist Arrivals (2000-2024) (millions)" = ar_full/1000000,
+                    "Tourist Arrivals (2000-2019) (millions)" = Arrivals_ts/1000000,
+                    "Tourist Spending (2000-2024) (billions USD)" = ex_full/1000,
+                    "Tourist Spending (2000-2019) (billions USD)" = Exports_ts/1000)
+
+ts_summary_table(ts_series)
+
+```
+
+## 2. Function of Time Models
+
+### a. Tourist Arrivals
+
+In total, we evaluated five different models to capture trends in the total arrivals time series, incorporating linear, quadratic, seasonal, and sinusoidal components. In order to mitigate the multicollinearity problems associated with VIF, we intentionally used the centered time object in all of our models, if appropriate.
+
+::: panel-tabset
+##### Linear
+
+In this model, we centered the time variable and fit a linear trend to arrivals. The output reveals a significant upward trend, with an estimated increase of 215,025 arrivals per time unit (p \< 0.05) and an intercept of 4,958,137. Residuals are centered and show a balanced spread. An adjusted R-squared of 0.7164 indicates that 71.64% of the variance in arrivals is explained by time, and a highly significant F-statistic (604.7, p \< 0.05) supports the model’s strength and the importance of time in explaining arrival trends. While the residuals appear stationary, they are not independent and do not follow a normal distribution.
+
+```{r}
+t <- time(Arrivals_ts)
+t_centered <- t - mean(t)
+
+# Linear
+ar_lm <- lm(Arrivals_ts ~ t_centered)
+summary(ar_lm)
+ts.plot(cbind(Arrivals_ts/1000000,ar_lm$fitted.values/1000000), col=c("darkblue", "darkred"),
+       ylab = "Arrivals (millions)", main = "Original Data with Fitted Values - Linear", lwd =1.5)
+legend("topleft", legend=c("Original Data", "Fitted Values"), col=c("darkblue", "darkred"), lty=1:1,lwd=2)
+checkresiduals(ar_lm$residuals)
+check_stationarity(ar_lm$residuals)
+check_normality_residuals(ar_lm)
+```
+
+##### Quadratic
+
+In this model, we included both a linear term (t_centered) and a quadratic term (I(t\^2)) to fit arrivals. The output indicates that neither the intercept, linear, nor quadratic coefficients are statistically significant (p \> 0.05), suggesting that the quadratic term does not add explanatory power to the model. However, an adjusted R-squared at 0.7152 means 71.52% of the variance in arrivals is still explained by the model. This is lower than the linear model alone, so we will not keep the quadratic term in following models. Meanwhile, a highly significant F-statistic (301.1, p \< 0.05) confirms that the model overall is meaningful, despite the individual terms lacking significance. Residuals are stationary but lack independence and normality.
+
+```{r}
+# Quadratic
+ar_quad <- lm(Arrivals_ts ~ t_centered + I(t^2) )
+summary(ar_quad)
+ts.plot(cbind(Arrivals_ts/1000000,ar_quad$fitted.values/1000000), col=c("darkblue", "darkred"),
+       ylab = "Arrivals (millions)", main = "Original Data with Fitted Values - Quadratic", lwd =1.5)
+legend("topleft", legend=c("Original Data", "Fitted Values"), col=c("darkblue", "darkred"), lty=1:1,lwd=2)
+checkresiduals(ar_quad$residuals)
+check_stationarity(ar_quad$residuals)
+check_normality_residuals(ar_quad)
+```
+
+##### Linear + Seasonal
+
+In this model, we included a centered time trend (t_centered) and monthly indicator variables (t_month) to capture both linear trends and seasonal patterns in arrivals. The output shows that both the intercept and time trend are highly significant (p \< 0.05), indicating a clear upward trend over time. Many monthly coefficients are also significant, suggesting distinct seasonal effects on arrivals (e.g., increased arrivals in July and August). The adjusted R-squared is 0.9131, meaning 91.31% of the variance in arrivals is explained by the model, a marked improvement in explanatory power. A highly significant F-statistic (210.4, p \< 0.05) confirms the model’s strong overall fit. However, the residuals show non-stationarity, non-independence, and non-normality.
+
+```{r}
+# Linear + Seasonal Trend (0.9128 with t^2 < 0.9131 without t^2)
+t_month <- factor(month(Masterdata$Time))
+ar_month <- lm(Arrivals_ts ~ t_centered + t_month)
+summary(ar_month)
+ts.plot(cbind(Arrivals_ts/1000000,ar_month$fitted.values/1000000 ), col=c("darkblue", "darkred"),
+       ylab = "Arrivals (millions)", main = "Original Data with Fitted Values - Linear + Seasonal", lwd =1.5)
+legend("topleft", legend=c("Original Data", "Fitted Values"), col=c("darkblue", "darkred"), lty=1:1,lwd=2)
+checkresiduals(ar_month$residuals)
+check_stationarity(ar_month$residuals)
+check_normality_residuals(ar_month)
+```
+
+##### Linear + Cosine
+
+In this model, we fit a linear trend (t_centered) alongside a seasonal cosine term (cosine_t) to capture both the trend and periodic seasonal effects in arrivals. The intercept and time trend are highly significant (p \< 0.05), suggesting a consistent upward trend, with an estimated increase of 215,116 arrivals per time unit. However, the cosine term is not significant (p = 0.155), indicating it does not add meaningful explanatory power for seasonality. The adjusted R-squared value of 0.7176 shows that the model explains 71.76% of the variance, while a highly significant F-statistic (304.7, p \< 0.05) confirms the model's overall fit. Residuals are stationary, yet they lack independence and normality.
+
+```{r}
+# Linear + Cosine Trend
+cosine_t <- cos(2 * pi * t / 12)
+ar_cos <- lm(Arrivals_ts ~ t_centered  + cosine_t)
+summary(ar_cos)
+ts.plot(cbind(Arrivals_ts/1000000,ar_cos$fitted.values/1000000 ), col=c("darkblue", "darkred"),
+       ylab = "Arrivals (millions)", main = "Original Data with Fitted Values - Linear + Cosine", lwd =1.5)
+legend("topleft", legend=c("Original Data", "Fitted Values"), col=c("darkblue", "darkred"), lty=1:1,lwd=2)
+checkresiduals(ar_cos$residuals)
+check_stationarity(ar_cos$residuals)
+check_normality_residuals(ar_cos)
+```
+
+##### Linear + Seasonal + Cosine
+
+In this model, we include both a linear time trend (t_centered) and seasonal components (cosine_t and t_month) to capture the trend and monthly variations in tourist arrivals. The intercept and trend term are highly significant (p \< 0.05), with an estimated increase of 213,407 arrivals per time unit. The cosine term and many monthly indicators are also significant, suggesting both trend and seasonal effects are present in the data. The high adjusted R-squared of 0.9154 indicates the model explains 91.54% of the variance in arrivals, supported by the significant F-statistic (199.9, p \< 0.05) for overall model fit. Residuals are largely normal and stationary, though they show some autocorrelation, indicating residual dependence over time.
+
+```{r}
+# Linear + Seasonal + Cosine
+ar_both <- lm(Arrivals_ts ~ t_centered  + cosine_t + t_month)
+summary(ar_both)
+ts.plot(cbind(Arrivals_ts/1000000,ar_both$fitted.values/1000000 ), col=c("darkblue", "darkred"),
+       ylab = "Arrivals (millions)", main = "Original Data with Fitted Values - Linear + Seasonal + Cosine", lwd =1.5)
+legend("topleft", legend=c("Original Data", "Fitted Values"), col=c("darkblue", "darkred"), lty=1:1,lwd=2)
+checkresiduals(ar_both$residuals)
+check_stationarity(ar_both$residuals)
+check_normality_residuals(ar_both)
+```
+:::
+
+::: panel-tabset
+##### Model Comparison
+
+Of these, two models with seasonal adjustments, “Linear + Seasonal” and “Linear + Seasonal + Cosine,” demonstrated the best performance in terms of trend accuracy and seasonal variability. These models also achieved the lowest AIC values (6925.19 and 6919.86), lowest BIC values (6973.92 and 6972.07), and the highest R-squared values (0.91 and 0.92). Based on these criteria, the “Linear + Seasonal + Cosine” model is the preferred fit for the tourist arrivals data.
+
+```{r}
+# Summary
+ar_models <- list("Linear Model" = ar_lm,
+                  "Quadratic Model" = ar_quad,
+                  "Linear + Seasonal" = ar_month,
+                  "Linear + Cosine" = ar_cos,
+                  "Linear + Seasonal + Cosine" = ar_both)
+model_summary_table(ar_models)
+```
+
+However, it is important to note that this model’s residuals do not meet assumptions of stationarity, normality, or independence, which limits our confidence in the forecast intervals.
+
+```{r}
+# Check model
+check_model(ar_month)
+```
+
+##### Decomposition
+
+Here, we try to decompose the time series. As shown in the plots, there are significant seasonality of frequency 12 months.
+
+```{r}
+# Classical Seasonal Decomposition by Moving Averages
+plot(decompose(Arrivals_ts/1000000))
+
+# STL Decomposition
+plot(stl(Arrivals_ts/1000000, s.window = 12))
+```
+
+##### Cross-Validation
+
+Here, we trained the model with data up to 2018, and then tested against actual data in 2019. This technique is called Leave One Out Cross Validation (LOOCV) (Olivo, 2024). The predicted values and intervals miss the actual data almost every time and the $R^2$ is negative, suggesting a poor fit.
+
+```{r}
+# Train on Data Up to 2018 and Predict for 2019 (with 95% CI)
+train_data <- window(Arrivals_ts, end = c(2018, 12))
+test_data <- window(Arrivals_ts, start = c(2019, 1), end = c(2019, 12))
+t_train <- time(train_data)
+t_month_train <- t_month[1:228]
+cosine_t_train <- cosine_t[1:228]
+model_train <- lm(train_data ~ t_train + cosine_t_train + t_month_train)
+t_test <- time(test_data)
+t_month_test <- t_month[229:240]
+cosine_t_test <- cosine_t[229:240]
+predictions_2019 <- predict(model_train,
+                            newdata = data.frame(t_train = t_test,
+                                                 cosine_t_train = cosine_t_test,
+                                                 t_month_train = t_month_test),
+                            interval = "confidence", level = 0.95)
+
+# Combine actual and predicted data
+time_full_2019 <- data.frame(
+  Date = c(time(train_data), time(test_data)),
+  Actual = c(as.numeric(train_data), as.numeric(test_data)),
+  Predicted = c(rep(NA, length(train_data)), predictions_2019[,"fit"]),
+  Lower_CI = c(rep(NA, length(train_data)), predictions_2019[,"lwr"]),
+  Upper_CI = c(rep(NA, length(train_data)), predictions_2019[,"upr"]))
+
+time_only_2019 <- data.frame(
+  Date = as.Date(time(test_data)),
+  Actual = test_data,
+  Predicted = predictions_2019[,"fit"],
+  Lower_CI = predictions_2019[,"lwr"],
+  Upper_CI = predictions_2019[,"upr"])
+
+ar_pred_2019 <- ggplot(time_only_2019, aes(x = Date)) +
+  geom_line(aes(y = Actual/1000000, color = "Actual")) +
+  geom_line(aes(y = Predicted/1000000, color = "Predicted")) +
+  geom_ribbon(aes(ymin = Lower_CI/1000000, ymax = Upper_CI/1000000), fill = "grey30", alpha = 0.4) +
+  labs(title = "Actual and Predicted Arrivals (2019) with 95% CI",
+       y = "Tourist Arrivals (millions)")+
+  scale_x_date(date_labels = "%b %Y", date_breaks = "2 months") +
+  theme_minimal() +
+  scale_color_manual(values = c("Actual" = "darkblue", "Predicted" = "red"))
+
+ar_pred_full <- ggplot(time_full_2019, aes(x = Date)) +
+  geom_line(aes(y = Actual/1000000, color = "Actual")) +
+  geom_line(aes(y = Predicted/1000000, color = "Predicted")) +
+  geom_ribbon(aes(ymin = Lower_CI/1000000, ymax = Upper_CI/1000000), fill = "grey30", alpha = 0.4) +
+  labs(title = "Actual and Predicted Arrivals (2019) with 95% CI",
+       y = "Tourist Arrivals (millions)") +
+  theme_minimal() +
+  scale_color_manual(values = c("Actual" = "darkblue", "Predicted" = "red"))
+grid.arrange(ar_pred_full, ar_pred_2019, nrow=2)
+
+
+# R^2
+calculate_r2(as.numeric(predictions_2019),as.numeric(test_data))
+
+```
+
+##### Prediction
+
+Based on the poor result in the cross-validation test, when we applied the model to forecast arrivals for hypothetical years 2020 and 2021 (assuming no impact from COVID-19), the predictions likely exceeded what actual values would have been in such a scenario.
+
+```{r}
+# Fit Model on Full Data and Forecast Two Years Ahead (with 95% CI)
+ar_pred <- lm(Arrivals_ts ~ t  + cosine_t + t_month)
+future_dates <- ts(rep(NA, 24),start= c(2020,1), frequency = 12)
+t_future <- time(future_dates)
+cosine_t_future <- cos(2 * pi * time(future_dates) / 12)
+t_month_future <- factor(month(seq(as.Date("2020-01-01"),
+                                   as.Date("2021-12-01"), by = "month")))
+predictions_future <- predict(ar_pred,
+                              newdata = data.frame(t = t_future,
+                                                   cosine_t = cosine_t_future,
+                                                   t_month = t_month_future),
+                              interval = "confidence", level = 0.95)
+
+# Combine actual data with forecast
+forecast_2020_2021 <- data.frame(
+  Date = c(time(Arrivals_ts), time(future_dates)),
+  Actual = c(as.numeric(Arrivals_ts), rep(NA, length(future_dates))),
+  Forecast = c(rep(NA, length(Arrivals_ts)), predictions_future[,"fit"]),
+  Lower_CI = c(rep(NA, length(Arrivals_ts)), predictions_future[,"lwr"]),
+  Upper_CI = c(rep(NA, length(Arrivals_ts)), predictions_future[,"upr"]))
+
+# Plot
+ggplot(forecast_2020_2021, aes(x = Date)) +
+  geom_line(aes(y = Actual/1000000, color = "Actual")) +
+  geom_line(aes(y = Forecast/1000000, color = "Forecast")) +
+  geom_ribbon(aes(ymin = Lower_CI/1000000, ymax = Upper_CI/1000000), fill = "grey30", alpha = 0.4) +
+  labs(title = "Tourist Arrivals Forecast (2020-2021) with 95% CI",
+       y = "Tourist Arrivals (millions)") +
+  theme_minimal() +
+  scale_color_manual(values = c("Actual" = "darkblue", "Forecast" = "red"))
+```
+:::
+
+### b. Tourist Spending
+
+::: panel-tabset
+##### Linear
+
+This linear model for monthly tourist exports data reveals a significant upward trend over time, with an estimated increase of 736.80 in exports per time unit (p \< 0.05). The intercept, estimated at 13,864.95, represents the baseline level of exports. The high adjusted R\^2 value of 0.9211 indicates that 92.11% of the variance in exports is explained by time, supporting a strong fit. Additionally, the significant F-statistic (2792, p \< 0.05) affirms the model's relevance. However, residuals display non-normality, lack independence, and are non-stationary, signaling potential limitations for forecasting or inference reliability in this model.
+
+```{r}
+t <- time(Exports_ts)
+t_centered <- t - mean(t)
+
+# Linear
+ex_lm <- lm(Exports_ts ~ t_centered)
+summary(ex_lm)
+ts.plot(cbind(Exports_ts/1000,ex_lm$fitted.values/1000), 
+        col=c("darkblue", "darkred"), ylab = "Exports (billions $)", 
+        main = "Original Data with Fitted Values - Linear", lwd =1.5)
+legend("topleft", legend=c("Original Data", "Fitted Values"), 
+       col=c("darkblue", "darkred"), lty=1:1,lwd=2)
+
+checkresiduals(ex_lm$residuals)
+check_stationarity(ex_lm$residuals)
+check_normality_residuals(ex_lm)
+```
+
+##### Quadratic
+
+In this quadratic model for monthly tourist exports, both the linear and quadratic time terms significantly predict exports, indicating a curved upward trend. The intercept, estimated at -5.899e+07, reflects the baseline export level when accounting for both terms. The quadratic term’s positive estimate (1.461 per time unit squared) suggests an accelerating increase over time. The high R\^2 of 0.9305 implies that 93.05% of the variance in exports is explained by the model, and the substantial F-statistic (1602, p \< 0.05) highlights its strong fit. Nonetheless, residuals remain non-normal, non-independent, and non-stationary, which may impact the model’s robustness for further interpretation or predictive use.
+
+Note that the adjusted R\^2 here is higher than that of the linear model alone, so we will keep this quadratic term in the following models
+
+```{r}
+
+# Quadratic
+ex_quad <- lm(Exports_ts ~ t_centered + I(t^2) )
+summary(ex_quad)
+ts.plot(cbind(Exports_ts/1000,ex_quad$fitted.values/1000), 
+        col=c("darkblue", "darkred"), ylab = "Exports (billions $)", 
+        main = "Original Data with Fitted Values - Quadratic", lwd =1.5)
+legend("topleft", legend=c("Original Data", "Fitted Values"), 
+       col=c("darkblue", "darkred"), lty=1:1,lwd=2)
+
+checkresiduals(ex_quad$residuals)
+check_stationarity(ex_quad$residuals)
+check_normality_residuals(ex_quad)
+```
+
+##### Quadratic + Seasonal
+
+This model incorporates both linear and quadratic time terms, along with monthly indicators, to capture trend and seasonality in the tourist exports data. Significant coefficients for the intercept, linear, and quadratic terms highlight a strong upward trend with a slight curvature. Monthly indicators are not statistically significant, suggesting that monthly seasonality has minimal impact on exports. The model's adjusted R\^2 of 0.9276 demonstrates strong explanatory power, supported by a high F-statistic (236.6, p \< 0.05), indicating a good overall fit. However, residuals remain non-normal, non-independent, and non-stationary.
+
+```{r}
+# Quadratic + Seasonal Trend 
+t_month <- factor(month(Masterdata$Time))
+ex_month <- lm(Exports_ts ~ t_centered + I(t^2) + t_month)
+summary(ex_month)
+ts.plot(cbind(Exports_ts/1000,ex_month$fitted.values/1000 ), 
+        col=c("darkblue", "darkred"), ylab = "Exports (billions $)", 
+        main = "Original Data with Fitted Values - Quadratic + Seasonal", lwd =1.5)
+legend("topleft", legend=c("Original Data", "Fitted Values"), 
+       col=c("darkblue", "darkred"), lty=1:1,lwd=2)
+
+checkresiduals(ex_month$residuals)
+check_stationarity(ex_month$residuals)
+check_normality_residuals(ex_month)
+```
+
+##### Quadractic + Cosine
+
+This model includes linear and quadratic time components, as well as a cosine term to capture cyclical effects in the tourist exports data. The significant coefficients for the intercept, linear, and quadratic terms suggest a strong upward trend with a curvature, while the cosine term is not statistically significant, indicating that cyclical seasonality is not a prominent factor in this model. The model’s adjusted R\^2 of 0.9304 indicates high explanatory power, supported by a substantial F-statistic (1066, p \< 0.05), reflecting a good model fit. However, residuals remain non-normal, non-independent, and non-stationary.
+
+```{r}
+# Linear + Cosine Trend
+cosine_t <- cos(2 * pi * t / 12)
+ex_cos <- lm(Exports_ts ~ t_centered + I(t^2) + cosine_t)
+summary(ex_cos)
+
+ts.plot(cbind(Exports_ts/1000,ex_cos$fitted.values/1000 ), col=c("darkblue", "darkred"),
+       ylab = "Exports (billions $)", 
+       main = "Original Data with Fitted Values - Quadratic + Cosine", lwd =1.5)
+legend("topleft", legend=c("Original Data", "Fitted Values"), 
+       col=c("darkblue", "darkred"), lty=1:1,lwd=2)
+
+checkresiduals(ex_cos$residuals)
+check_stationarity(ex_cos$residuals)
+check_normality_residuals(ex_cos)
+```
+
+##### Quadratic + Seasonal + Cosine
+
+This model includes linear, quadratic, and cosine terms, along wih monthly indicators. Both the linear and quadratic terms are statistically significant (p \< 0.05), suggesting that the trend follows a parabolic pattern. The cosine term and all monthly indicators, however, are not statistically significant (p \> 0.05), indicating that it may not add meaningful cyclical variation. With an adjusted R\^2of 0.9275, this model explains a substantial portion of the variance in the data. The F-statistic (219.3, p \< 0.05) supports the model's overall significance. However, residual issues persist, with non-normality, non-independence, and signs of non-stationarity.
+
+```{r}
+# Quadratic + Seasonal + Cosine
+ex_both <- lm(Exports_ts ~ t_centered + I(t^2) + cosine_t + t_month)
+summary(ex_both)
+
+ts.plot(cbind(Exports_ts/1000,ex_both$fitted.values/1000 ), col=c("darkblue", "darkred"),
+       ylab = "Exports (billions $)", 
+       main = "Original Data with Fitted Values - Quadratic + Seasonal + Cosine", lwd =1.5)
+legend("topleft", legend=c("Original Data", "Fitted Values"), 
+       col=c("darkblue", "darkred"), lty=1:1,lwd=2)
+
+checkresiduals(ex_both$residuals)
+check_stationarity(ex_both$residuals)
+check_normality_residuals(ex_both)
+
+```
+:::
+
+::: panel-tabset
+##### Model Comparison
+
+Here, a quadratic model emerged as the best fit, with an R-squared of 0.93, an AIC of 4077.33, and a BIC of 4091.25. However, these metrics across all five models were relatively similar, suggesting no model captured the data particularly better than the others.
+
+```{r}
+# Summary
+ex_models <- list("Linear Model" = ex_lm, 
+                  "Quadratic Model" = ex_quad, 
+                  "Quadratic + Seasonal" = ex_month, 
+                  "Quadratic + Cosine" = ex_cos, 
+                  "Quadratic + Seasonal + Cosine" = ex_both)
+model_summary_table(ex_models)
+```
+
+Additionally, the quadratic model’s residuals, like those of the arrivals model, failed to meet stationarity, normality, and independence assumptions, limiting the reliability of its forecast intervals. It also possesses problem of collinearity.
+
+```{r}
+check_model(ex_both)
+
+
+
+```
+
+##### Decomposition
+
+Here, we try to decompose the time series. As shown in the plots, while there seems to be signs of seasonality with frequency of 12 months, the magnitude of these seasonality signals are not so significant.
+
+```{r}
+# Classical Seasonal Decomposition by Moving Averages
+plot(decompose(Exports_ts/1000))
+
+# STL Decomposition
+plot(stl(Exports_ts/1000, s.window = 12))
+```
+
+##### Prediction
+
+Based on all of the poor statistics and test results above with this quadratic model, we know for certain that this model's predictive power should not be deemed reliable and all predictions have to be interpreted with caution. Hence, we skipped the cross-validation test and proceeded with the prediction.
+
+```{r}
+# Fit Model on Full Data and Forecast Two Years Ahead (with 95% CI)
+ex_pred <- lm(Arrivals_ts ~ t + I(t^2))
+
+
+future_dates <- ts(rep(NA, 24), start = c(2020, 1), frequency = 12)
+t_future <- time(future_dates)
+
+predictions_future <- predict(ex_pred,
+                              newdata = data.frame(t = t_future,
+                                                   `I(t^2)` = t_future^2),
+                              interval = "confidence", level = 0.95)
+
+
+forecast_2020_2021 <- data.frame(
+  Date = c(time(Arrivals_ts), time(future_dates)),
+  Actual = c(as.numeric(Arrivals_ts), rep(NA, length(future_dates))),
+  Forecast = c(rep(NA, length(Arrivals_ts)), predictions_future[,"fit"]),
+  Lower_CI = c(rep(NA, length(Arrivals_ts)), predictions_future[,"lwr"]),
+  Upper_CI = c(rep(NA, length(Arrivals_ts)), predictions_future[,"upr"]))
+
+
+ggplot(forecast_2020_2021, aes(x = Date)) +
+  geom_line(aes(y = Actual / 1000000, color = "Actual")) +
+  geom_line(aes(y = Forecast / 1000000, color = "Forecast")) +
+  geom_ribbon(aes(ymin = Lower_CI / 1000000, ymax = Upper_CI / 1000000), fill = "grey30", alpha = 0.4) +
+  labs(title = "Tourist Arrivals Forecast (2020-2021) with 95% CI",
+       y = "Tourist Arrivals (millions)") +
+  theme_minimal() +
+  scale_color_manual(values = c("Actual" = "darkblue", "Forecast" = "red"))
+
+
+```
+:::
+
+## 3. SARIMA Models
+
+### a. Tourist Arrivals
+
+
+#### i. Achieving Stationarity
+
+::: panel-tabset
+##### Time Series
+
+This time series is definitely not stationary, based on the time series plot, the tests, and the ACF/PACF plots.
+
+```{r}
+ggplot(Masterdata, aes(x = Time, y = Total)) +
+  geom_line(color = "darkblue", size = 1) +
+  ggtitle("US Monthly Tourist Arrivals (2000-2024)") +
+  xlab("Month") +
+  ylab("Tourist Arrivals") +
+  scale_x_date(date_labels = "%b %Y", date_breaks = "36 months")+
+  theme_light()+
+  scale_y_continuous(labels = scales::label_number(scale_cut = cut_short_scale()))
+
+check_stationarity(Arrivals_ts)
+two_plots(Arrivals_ts)
+```
+
+##### Auto ARIMA
+
+Auto.arima() suggests an ARIMA(3,0,2)(2,1,0)\[12\] with drift. From the outset, this model seems to fit the model well, with stationary and independent residuals. Yet, the residuals are not normal, suggesting poor reliability of forecasts. This step is only for reference, and we will attempt to build our only models.
+
+```{r}
+# Auto.arima() - ARIMA(3,0,2)(2,1,0)[12] with drift
+ar_initial <- auto.arima(Arrivals_ts)
+ar_initial
+
+ts.plot(cbind(Arrivals_ts/1000000,ar_initial$fitted/1000000), 
+        col=c("darkblue", "darkred"), ylab = "Arrivals (millions)", 
+        main = "Original Data with Fitted Values - Auto ARIMA", lwd =1.5)
+legend("topleft", legend=c("Original Data", "Fitted Values"), 
+       col=c("darkblue", "darkred"), lty=1:1,lwd=2)
+
+checkresiduals(ar_initial)
+two_plots(ar_initial$residuals)
+check_stationarity(ar_initial$residuals)
+check_normality_residuals(ar_initial)
+```
+
+##### Differencing
+
+Recall the ACF plot with a slow decay in both seasonal and normal lags, we will try both techniques here.
+
+```{r}
+# Seasonal Differencing
+sd_ar <- diff(Arrivals_ts,12)
+diff_plots(sd_ar/1000000,"Seasonally Differenced Time Series")
+check_stationarity(sd_ar)
+
+```
+
+By only seasonally differencing, the series does not pass all stationarity tests.
+
+```{r}
+# Normal Differencing
+diff_ar <- diff(Arrivals_ts)
+diff_plots(diff_ar, "Normally Differenced Time Series")
+check_stationarity(diff_ar)
+
+```
+
+By only normally differencing, the series is already stationary, based on the "by-eye" test and other statistical tests. Looking at the seasonal lags 12 and 24 decaying slowly in the ACF and the signicant lag 12 in the PACF, if we start fitting with only normal differencing, we will start with SAR 1. Note that the mean of residuals is zero, so we don't need to include a drift.
+
+```{r}
+
+# Normal & Seasonal Differencing
+ar_nsd <- diff(diff(Arrivals_ts,12))
+diff_plots(ar_nsd, "Normally & Seasonally Differenced Time Series")
+check_stationarity(ar_nsd)
+```
+
+> > By differencing both ways, we achieved a stationary series, with smaller variance and less autocorrelations. Based on the ACF and PACF, a next move could be MA 1. Note that the mean of residuals is zero, so we don't need to include a drift.
+
+:::
+
+
+#### ii. Model Fitting
+
+
+::: panel-tabset
+
+
+
+
+##### SARIMA Attempt 1 (d=1)
+
+In this attempt, we will only focus on SARIMA models with $d=1, D=0$.
+
+::: panel-tabset
+###### ARIMA 010100
+
+First, we fit an ARIMA(0,1,0)(1,0,0)\[12\]. Based on the ACF and PACF, the best next move would be to add an AR1, or $p=1$.
+
+```{r}
+# ARIMA 010100
+ar_010100 <- arima(Arrivals_ts, order=c(0,1,0),
+                   seasonal=list(order=c(1,0,0), period=12))
+ar_010100
+
+checkresiduals(ar_010100)
+two_plots(ar_010100$residuals)
+check_stationarity(ar_010100$residuals)
+check_normality_residuals(ar_010100)
+
+```
+
+###### ARIMA 011100
+
+Here, we fit an ARIMA(0,1,1)(1,0,0)\[12\]. Based on the ACF and PACF, the best next move would be to add an SMA1, or $Q=1$.
+
+```{r}
+# ARIMA 011100
+ar_011100 <- arima(Arrivals_ts, order=c(0,1,1), 
+                   seasonal=list(order=c(1,0,0), period=12))
+ar_011100
+checkresiduals(ar_011100)
+two_plots(ar_011100$residuals)
+check_stationarity(ar_011100$residuals)
+check_normality_residuals(ar_011100)
+
+```
+
+###### ARIMA 011101
+
+Here, we fit an ARIMA(0,1,1)(1,0,1)\[12\]. Based on the ACF, PACF, and other tests, we have finally found a model with independent and stationary residuals. All coefficients in the model are significant with small standard errors. However, the residuals are not normal; hence, we cannot trust the forecast intervals.
+
+```{r}
+
+
+# ARIMA 011101
+ar_011101 <- arima(Arrivals_ts, order=c(0,1,1), 
+                   seasonal=list(order=c(1,0,1), period=12), method="ML")
+ar_011101
+checkresiduals(ar_011101)
+two_plots(ar_011101$residuals)
+
+check_stationarity(ar_011101$residuals)
+check_normality_residuals(ar_011101)
+
+
+```
+:::
+
+##### SARIMA Attempt 2 (d=D=1)
+In this attempt, we will only focus on SARIMA models with $d= D=0$.
+::: panel-tabset
+###### ARIMA 011010
+
+From the suggestions during differencing, we first fit an ARIMA(0,1,1)(0,1,0)\[12\]. Based on the ACF and PACF, a SMA 1 ($Q=1$)should be recalled.
+
+```{r}
+
+# ARIMA 011010
+ar_011010 <- arima(Arrivals_ts, order=c(0,1,1), seasonal=list(order=c(0,1,0), period=12))
+ar_011010
+checkresiduals(ar_011010)
+two_plots(ar_011010$residuals)
+check_stationarity(ar_011010$residuals)
+check_normality_residuals(ar_011010)
+
+```
+
+###### ARIMA 011011
+
+Here, we fit an ARIMA(0,1,1)(0,1,1)\[12\]. Based on the ACF, PACF, and other statistical tests, we have found a model with independent and stationary residuals. However, the residuals are not normal; hence, we cannot trust the forecast intervals.
+
+```{r}
+
+# ARIMA 011011
+ar_011011 <- arima(Arrivals_ts, order=c(0,1,1), 
+                   seasonal=list(order=c(0,1,1), period=12))
+ar_011011
+checkresiduals(ar_011011)
+two_plots(ar_011011$residuals)
+
+check_stationarity(ar_011011$residuals)
+check_normality_residuals(ar_011011)
+
+```
+:::
+:::
+
+
+#### iii. Model Validation & Prediction 
+::: panel-tabset
+
+
+
+##### Model Comparison
+
+Based on the summary table below, the best model appears to be ARIMA(0,1,1)(0,1,1)\[12\], with the lowest AIC and BIC values. Still, we recall that the residuals for this model are not normal, and thus we should not trust the forecast intervals with much reliability.
+
+```{r}
+ar_sarima_models <- list("auto.arima()"= ar_initial, 
+                         "SARIMA(0,1,0)(1,0,0)[12] without drift" = ar_010100,
+                         "SARIMA(0,1,1)(1,0,0)[12] without drift" = ar_011100,
+                         "SARIMA(0,1,1)(1,0,1)[12] without drift" = ar_011101,
+                         "SARIMA(0,1,1)(0,1,0)[12] without drift" = ar_011010, 
+                         "SARIMA(0,1,1)(0,1,1)[12] without drift" = ar_011011)
+sarima_summary_table(ar_sarima_models)
+```
+
+```{r}
+
+check_model(ar_011011)
+```
+
+##### Cross Validation
+
+After verifying that ARIMA(0,1,1)(0,1,1)\[12\] is also the best fit for the time period between 2000 and 2018, we used this model to predict the 2019 value and tested against the actual data. The result is astonishing with the fitted values following closely actual values. Moreover, an R\^2 value of 0.9707 suggests that 97.07% of the variability in actual data can be explained by our model. We now want to leverage this model to predict the 2020 and 2021 hypothetical scenarios of no COVID.
+
+```{r}
+#Setting up
+train_data <- window(Arrivals_ts, end = c(2018, 12))
+test_data <- window(Arrivals_ts, start = c(2019, 1), end = c(2019, 12))
+
+forecast_2019 <- sarima.for(train_data, n.ahead = 12, 0, 1, 1, 0, 1, 1, 12, plot =FALSE)
+
+predicted_2019 <- forecast_2019$pred
+lower_ci_2019 <- forecast_2019$pred - 1.96 * forecast_2019$se
+upper_ci_2019 <- forecast_2019$pred + 1.96 * forecast_2019$se
+
+time_full_2019 <- data.frame(
+  Date = c(time(train_data), time(test_data)),
+  Actual = c(as.numeric(train_data), as.numeric(test_data)),
+  Predicted = c(rep(NA, length(train_data)), predicted_2019),
+  Lower_CI = c(rep(NA, length(train_data)), lower_ci_2019),
+  Upper_CI = c(rep(NA, length(train_data)), upper_ci_2019))
+
+time_only_2019 <- data.frame(
+  Date = as.Date(time(test_data)),
+  Actual = test_data,
+  Predicted = predicted_2019,
+  Lower_CI = lower_ci_2019,
+  Upper_CI = upper_ci_2019)
+
+# Plotting only 2019 
+ar_pred_2019_sarima <- ggplot(time_only_2019, aes(x = Date)) +
+  geom_line(aes(y = Actual / 1000000, color = "Actual")) +
+  geom_line(aes(y = Predicted / 1000000, color = "Predicted")) +
+  geom_ribbon(aes(ymin = Lower_CI / 1000000, ymax = Upper_CI / 1000000), fill = "grey30", alpha = 0.4) +
+  labs(title = "Actual and Predicted Arrivals (2019) with 95% CI",
+       y = "Tourist Arrivals (millions)") +
+  scale_x_date(date_labels = "%b %Y", date_breaks = "2 months") +
+  theme_minimal() +
+  scale_color_manual(values = c("Actual" = "darkblue", "Predicted" = "red"))
+
+# Plotting full 
+ar_pred_full_sarima <- ggplot(time_full_2019, aes(x = Date)) +
+  geom_line(aes(y = Actual / 1000000, color = "Actual")) +
+  geom_line(aes(y = Predicted / 1000000, color = "Predicted")) +
+  geom_ribbon(aes(ymin = Lower_CI / 1000000, ymax = Upper_CI / 1000000), fill = "grey30", alpha = 0.4) +
+  labs(title = "Actual and Predicted Arrivals (2019) with 95% CI",
+       y = "Tourist Arrivals (millions)") +
+  theme_minimal() +
+  scale_color_manual(values = c("Actual" = "darkblue", "Predicted" = "red"))
+
+grid.arrange(ar_pred_full_sarima, ar_pred_2019_sarima, nrow = 2)
+
+
+# R^Squared 
+calculate_r2(as.numeric(predicted_2019), as.numeric(test_data))
+
+
+```
+
+##### Prediction
+
+Here, we can see that the model predicts monthly arrivals to be relatively stable, exhibiting historical seasonal trends with a slightly upward motion. This makes sense as without COVID-19, the US should have remained its attractiveness as an ideal place for travel, business, and education in 2020 and 2021.
+
+```{r}
+# Run SARIMA forecast for 24 months ahead (2020 and 2021)
+ar_sarima_for <- sarima.for(Arrivals_ts, n.ahead = 24, 0,1,1,0,1,1, S = 12, plot = FALSE)
+
+forecasted_values <- ar_sarima_for$pred
+lower_bound <- ar_sarima_for$pred - 1.96 * ar_sarima_for$se
+upper_bound <- ar_sarima_for$pred + 1.96 * ar_sarima_for$se
+
+time_forecast <- ts(rep(NA,24), start = c(2020, 1), end = c(2021, 12), frequency = 12)
+
+forecast_ts <- ts(forecasted_values, start = c(2020, 1), frequency = 12)
+lower_bound_ts <- ts(lower_bound, start = c(2020, 1), frequency = 12)
+upper_bound_ts <- ts(upper_bound, start = c(2020, 1), frequency = 12)
+
+combined_ts <- ts(c(Arrivals_ts, forecast_ts), start = start(Arrivals_ts), frequency = 12)
+
+time_full_forecast <- data.frame(
+  Date = c(time(Arrivals_ts), time(time_forecast)),
+  Actual = c(as.numeric(Arrivals_ts), rep(NA, length(forecast_ts))),
+  Predicted = c(rep(NA, length(Arrivals_ts)), forecasted_values),
+  Lower_CI = c(rep(NA, length(Arrivals_ts)), lower_bound),
+  Upper_CI = c(rep(NA, length(Arrivals_ts)), upper_bound))
+
+time_forecast_2020_2021 <- data.frame(
+  Date = as.Date(time(time_forecast)),
+  Predicted = forecasted_values,
+  Lower_CI = lower_bound,
+  Upper_CI = upper_bound)
+
+# Plotting full dataset with forecasts
+ar_pred_full_forecast <- ggplot(time_full_forecast, aes(x = Date)) +
+  geom_line(aes(y = Actual / 1000000, color = "Actual")) +
+  geom_line(aes(y = Predicted / 1000000, color = "Predicted")) +
+  geom_ribbon(aes(ymin = Lower_CI / 1000000, ymax = Upper_CI / 1000000), fill = "grey30", alpha = 0.4) +
+  labs(title = "Full Data with Forecasted Arrivals (2020-2021) with 95% CI",
+       y = "Tourist Arrivals (millions)") +
+  theme_minimal() +
+  scale_color_manual(values = c("Actual" = "darkblue", "Predicted" = "red"))
+
+# Plotting only 2020 and 2021
+ar_pred_2020_2021 <- ggplot(time_forecast_2020_2021, aes(x = Date)) +
+  geom_line(aes(y = Predicted / 1000000, color = "Predicted")) +
+  geom_ribbon(aes(ymin = Lower_CI / 1000000, ymax = Upper_CI / 1000000), fill = "grey30", alpha = 0.4) +
+  labs(title = "Forecasted Tourist Arrivals (2020-2021) with 95% CI",
+       y = "Tourist Arrivals (millions)") +
+  scale_x_date(date_labels = "%b %Y", date_breaks = "3 months") +
+  theme_minimal() +
+  scale_color_manual(values = c("Predicted" = "red"))
+
+grid.arrange(ar_pred_full_forecast, ar_pred_2020_2021, nrow = 2)
+
+```
+:::
+
+### b. Tourist Spending
+
+
+
+#### i. Achieving Stationarity
+
+::: panel-tabset
+##### Time Series
+
+This time series is definitely not stationary, based on the time series plot, the tests, and the ACF/PACF plots.
+
+```{r}
+ggplot(Masterdata, aes(x = Time, y = Exports)) +
+  geom_line(color = "darkred", size = 1) +
+  ggtitle("US Monthly Tourist Exports, seasonally adjusted (2000-2024)") +
+  xlab("Month") +
+  ylab("Export Values (million $)") +
+  scale_x_date(date_labels = "%b %Y", date_breaks = "36 months")+
+  theme_light()+
+  scale_y_continuous(labels = scales::label_number(scale_cut = cut_short_scale()))
+
+check_stationarity(Exports_ts)
+two_plots(Exports_ts)
+
+```
+
+##### Auto ARIMA
+
+Auto.arima() suggests an ARIMA(2,1,2)(2,0,0)\[12\] with drift. From the outset, this model seems to fit the model well, with stationary and independent residuals. Yet, the residuals are not normal, suggesting poor reliability of forecasts. This step is only for reference, and we will attempt to build our only models.
+
+```{r}
+# Auto.arima() - ARIMA(2,1,2)(2,0,0)[12] with drift
+ex_initial <- auto.arima(Exports_ts)
+ex_initial
+
+
+ts.plot(cbind(Exports_ts/1000,ex_initial$fitted/1000), 
+        col=c("darkblue", "darkred"), ylab = "Exports (billions $)", 
+        main = "Original Data with Fitted Values - Auto ARIMA", lwd =1.5)
+legend("topleft", legend=c("Original Data", "Fitted Values"), 
+       col=c("darkblue", "darkred"), lty=1:1,lwd=2)
+
+
+checkresiduals(ex_initial)
+two_plots(ex_initial$residuals)
+
+check_stationarity(ex_initial$residuals)
+check_normality_residuals(ex_initial)
+
+
+```
+
+##### Differencing
+
+Recall the slow decay in the ACF plot, normal differencing is the first thing we should try. Luckily, it appears to be all that we need to achieve stationarity. Noting the non-zero mean of residuals, we will include a drift term in our models. Based on the ACF and PACF, the best next move appears to be a SMA 1 ($Q=1$)
+
+```{r}
+
+ex_diff <- diff(Exports_ts)
+
+diff_plots(ex_diff,"Normally Differenced Time Series")
+
+```
+::: 
+
+#### ii. Model Fitting
+::: panel-tabset
+
+
+##### SARIMA Attempt 1 
+From the suggestions during differencing, we first fit an ARIMA(0,1,0)(0,0,1)[12]. Luckily, we immediately arrived at a good model with residuals showing stationarity and independence. However, the residuals are not normal; hence, we cannot trust the forecast intervals.
+
+```{r}
+ex_010001 <- Arima(Exports_ts, order=c(0,1,0), seasonal=list(order=c(0,0,1), period=12), include.drift=TRUE)
+ex_010001
+checkresiduals(ex_010001)
+two_plots(ex_010001$residuals)
+check_stationarity(ex_010001$residuals)
+check_normality_residuals(ex_010001)
+
+```
+
+
+
+##### SARIMA Attempt 2
+
+::: panel-tabset
+
+
+###### ARIMA 010200 w/ drift 
+
+From the ACF anf PACF plots during differencing, someone may suggest an SAR2 as well, i.e. ($P=2$). Hence, we fit an ARIMA(0,1,0)(2,0,0)[12]. Here, we also achieved stationarity and independence for residuals, though not normality. With two solid models, we wanted to see what would happen if we include more terms. 
+
+
+```{r}
+ex_010200 <- Arima(Exports_ts, order=c(0,1,0), seasonal=list(order=c(2,0,0), period=12), include.drift=TRUE)
+ex_010200
+checkresiduals(ex_010200)
+two_plots(ex_010200$residuals)
+check_stationarity(ex_010200$residuals)
+check_normality_residuals(ex_010200)
+
+
+
+```
+
+
+
+###### ARIMA 011200 w/ drift
+
+```{r}
+ex_011200 <- Arima(Exports_ts, order=c(0,1,1), seasonal=list(order=c(2,0,0), period=12), include.drift=TRUE)
+ex_011200
+checkresiduals(ex_011200)
+two_plots(ex_011200$residuals)
+
+check_stationarity(ex_011200$residuals)
+check_normality_residuals(ex_011200)
+
+```
+
+###### ARIMA 111200 w/ drift
+
+```{r}
+
+ex_111200 <- Arima(Exports_ts, order=c(1,1,1), seasonal=list(order=c(2,0,0), period=12), include.drift=TRUE)
+ex_111200
+checkresiduals(ex_111200)
+two_plots(ex_111200$residuals)
+
+
+check_stationarity(ex_111200$residuals)
+check_normality_residuals(ex_111200)
+
+```
+
+:::
+:::
+
+
+
+#### iii. Model Validation & Prediction 
+
+::: panel-tabset
+
+
+##### Model Comparison
+
+Of all five models, our first two models appear to be the best fits to the data. However, while the second one (SARIMA(0,1,0)(2,0,0)[12] with drift) is more favorable in terms of AIC, the first one (SARIMA(0,1,0)(0,0,1)[12] with drift) is superior in terms of BIC. Now, as we know that the time series is seasonally adjusted, which means that seasonality should not play too much of a role in our prediction; hence, the notion that tourist exports from two years ago may still have an impact on that of this current month seems unplausible. Therefore, we believe that the first model, SARIMA(0,1,0)(0,0,1)[12] with drift, should be deemed as best fit. Again, as the residuals are not normal, we should not blindly trust our forecast intervals. 
+
+```{r}
+
+ex_sarima_models <- list("auto.arima() "= ex_initial,
+                         "SARIMA(0,1,0)(0,0,1)[12] with drift" = ex_010001,
+                         "SARIMA(0,1,0)(2,0,0)[12] with drift" = ex_010200,
+                         "SARIMA(0,1,1)(2,0,0)[12] with drift" = ex_011200,
+                         "SARIMA(1,1,1)(2,0,0)[12] with drift" = ex_111200)
+sarima_summary_table(ex_sarima_models)
+
+check_model(ex_010001)
+
+```
+
+##### Prediction
+
+```{r}
+# Run SARIMA forecast for Exports_ts
+ex_sarima_for <- sarima.for(Exports_ts, n.ahead = 24, 0,1,0,2,0,0, S = 12, plot = FALSE)
+forecasted_values <- ex_sarima_for$pred
+lower_bound <- ex_sarima_for$pred - 1.96 * ex_sarima_for$se
+upper_bound <- ex_sarima_for$pred + 1.96 * ex_sarima_for$se
+time_forecast <- time(Exports_ts)[length(Exports_ts)] + seq(1/12, 2, by=1/12)
+ts_forecast <- ts(forecasted_values, start = c(2020, 1), frequency = 12)
+combined_ts <- ts(c(Exports_ts, ts_forecast), start = start(Exports_ts), frequency = 12)
+astsa::tsplot(combined_ts/1000, col = "darkblue", lwd = 1, type = "l",
+              ylab = "Exports (billions $)", main = "US Monthly Tourist Exports Forecast",
+              ylim = c(0, max(upper_bound/1000)))
+lines(ts_forecast/1000, col = "red", lwd = 1.5)  # Forecasted values
+lines(ts(lower_bound, start = c(2020, 1), frequency = 12)/1000, lty = 3, col = "blue")
+lines(ts(upper_bound, start = c(2020, 1), frequency = 12)/1000, lty = 3, col = "blue")
+legend("topleft", legend = c("Observed", "Forecast", "95% Confidence Interval"),
+       col = c("darkblue", "red", "blue"), lty = c(1, 1, 3), lwd = c(1, 1.5, 1))
+```
+:::
