@@ -43,7 +43,7 @@
 % Title
 % ------------------------------------------------------------------
 \title{\textbf{Time Series Analysis of U.S. Monthly \\ Tourist Arrivals and Spending}}
-\author{Anthony Le \\[0.3em] \normalsize Department of Mathematics, Denison University}
+\author{\textbf{Anthony Le} \\[0.3em] \normalsize Department of Mathematics, Denison University}
 \date{October 26, 2024}
 
 \begin{document}
@@ -55,7 +55,7 @@
 \end{abstract}
 
 % ==================================================================
-\section{I. Introduction}
+\section{Introduction}
 % ==================================================================
 
 The economic impact of international tourism in the United States is substantial, with global travelers contributing billions annually to the U.S. economy. Before the COVID-19 pandemic, international visitors spent approximately \$233.5 billion in 2019 alone, which averages to nearly \$640 million daily (International Trade Administration, n.d.). With U.S. tourism accounting for 14.5\% of total global spending on international travel (Zaheer, 2023), understanding the trends and drivers behind these expenditures is vital for sustaining this economic sector.
@@ -63,7 +63,7 @@ The economic impact of international tourism in the United States is substantial
 While tourist spending is influenced by various socioeconomic factors, one of the most reliable indicators of such expenditures is the volume of international arrivals, commonly referred to as ``Tourist Arrivals.'' Fluctuations in arrivals often correlate closely with factors like currency exchange rates, seasonal trends, and global geopolitical stability (Hinton, 2024). In an attempt to explore the dynamics between tourist arrivals and spending, this project seeks to find the best predictive models of both metrics. Leveraging upon the function of time and SARIMA models, this study aims to provide a robust and comprehensive understanding of U.S. tourism's economic contributions, as well as a tool for predicting future trends in international arrivals and spending.
 
 % ==================================================================
-\section{II. Methods}
+\section{Methods}
 % ==================================================================
 
 \subsection{Working Data}
@@ -132,7 +132,7 @@ To facilitate this analysis, I have self-defined new functions in R to streamlin
 These functions enhance the analysis process by providing clarity and efficiency.
 
 % ==================================================================
-\section{III. Results \& Conclusions}
+\section{Results \& Conclusions}
 % ==================================================================
 
 \subsection{Descriptive Analysis}
@@ -206,13 +206,13 @@ This suggests that the tourist exports of this month ($\mathbf{X}_{\mathbf{t}}$)
 Despite these residual limitations, we generated forecasts for tourist exports for 2020 and 2021, assuming no pandemic impact. Again, these forecasts are hypothetical and should be interpreted with caution. The projections for this scenario are provided in Figure 14.
 
 % ==================================================================
-\section{IV. Closing}
+\section{Closing}
 % ==================================================================
 
 This project has been a meaningful learning experience that allowed me to consolidate and expand my understanding of time series analysis. By working independently through each phase, I gained a deeper insight into structuring a comprehensive approach to building predictive models from scratch, applying a series of tests and functions to evaluate model suitability. Additionally, I developed custom functions to streamline this analysis, making it easier to interpret results and refine the model-building-and-validation process. For future research, I would be interested in exploring GARCH models to address potential non-stationary variance in residuals and investigating possible relationships between tourist arrivals and exports, a connection I was unable to examine fully due to time constraints. Overall, this project has given me a clearer sense of the concepts and techniques essential to building robust time series models and has shown me areas to revisit in my coursework to further strengthen my skills.
 
 % ==================================================================
-\section{V. Appendix}
+\section{Appendix}
 % ==================================================================
 
 \subsection{Supporting Illustrations}
@@ -324,7 +324,7 @@ This project has been a meaningful learning experience that allowed me to consol
 \bigskip
 
 \begin{center}
-\includegraphics[width=0.85\textwidth]{figures/image30.png}
+\includegraphics[width=0.9\textwidth]{figures/image30.png}
 
 \textbf{Figure 14.} Forecasts for monthly exports in 2020 and 2021, assuming the absence of COVID-19 pandemic, based on the $ARIMA(0,1,0)\times(2,0,0)_{12}$ fitted on historical data.
 \end{center}
@@ -333,7 +333,7 @@ This project has been a meaningful learning experience that allowed me to consol
 \subsection{Summary Tables}
 
 \begin{center}
-\includegraphics[width=0.75\textwidth]{figures/image31.png}
+\includegraphics[width=1\textwidth]{figures/image31.png}
 
 \textbf{Table 1.} Key statistics of working time series
 \end{center}
@@ -360,7 +360,7 @@ This project has been a meaningful learning experience that allowed me to consol
 \bigskip
 
 \begin{center}
-\textbf{Table 7.} Equations for SARIMA models.
+\textbf{Table 6.} Equations for SARIMA models.
 \smallskip
 
 \begin{tabular}{@{}p{0.32\textwidth} p{0.58\textwidth}@{}}
@@ -375,7 +375,7 @@ Monthly Tourist Exports \newline $(0,1,0)\times(2,0,0)_{12}$ & $\nabla X_{t} = -
 \bigskip
 
 \begin{center}
-\textbf{Table 8.} Comparison of AIC and BIC values among the best-fitting models.
+\textbf{Table 7.} Comparison of AIC and BIC values among the best-fitting models.
 \smallskip
 
 \begin{tabular}{@{}l l c c@{}}
@@ -458,7 +458,7 @@ Kurtosis quantifies the ``tailedness'' of data, with values near 3 indicating no
 \clearpage
 
 % ==================================================================
-\section{VI. References}
+\section{References}
 % ==================================================================
 
 \begin{references}
